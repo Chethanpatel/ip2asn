@@ -1,17 +1,14 @@
 import streamlit as st
 import pandas as pd
 import ipaddress
-import json
 from intervaltree import IntervalTree
 from urllib.request import Request, urlopen
 import os
 
-# Constants
 IP2ASN_URL = "https://iptoasn.com/data/ip2asn-v4.tsv.gz"
 IP2ASN_FILENAME = "ip2asn-v4.tsv.gz"
 
-# Download the IP2ASN dataset (with browser-like headers)
-@st.cache_data(ttl=86400)  # cache for 1 day
+@st.cache_data(ttl=86400)
 def download_ip2asn():
     if not os.path.exists(IP2ASN_FILENAME):
         req = Request(IP2ASN_URL, headers={"User-Agent": "Mozilla/5.0"})
@@ -19,7 +16,6 @@ def download_ip2asn():
             out_file.write(response.read())
     return IP2ASN_FILENAME
 
-# Load the IP2ASN data into an interval tree for fast IP lookup
 @st.cache_resource
 def load_ip2asn_interval_tree(filename):
     df = pd.read_csv(
@@ -44,7 +40,6 @@ def load_ip2asn_interval_tree(filename):
             continue
     return tree
 
-# Lookup function for a given IP
 def get_asn_info(ip, tree):
     try:
         ip_obj = ipaddress.IPv4Address(ip)
@@ -64,19 +59,21 @@ def get_asn_info(ip, tree):
         }
     return {"AS_description": "ASN Unknown"}
 
-# ------------------ Streamlit UI ------------------
+# Load tree only once
+filename = download_ip2asn()
+tree = load_ip2asn_interval_tree(filename)
 
-st.title("🔍 IP to ASN Lookup")
+# Handle as API if query param present
+query_params = st.query_params()
+ip_param = query_params.get("ip", [None])[0]
 
-ip_input = st.text_input("Enter an IPv4 Address (e.g. 8.8.8.8)", "")
-
-if st.button("Get ASN Info") and ip_input:
-    try:
-        filename = download_ip2asn()
-        tree = load_ip2asn_interval_tree(filename)
+if ip_param:
+    result = get_asn_info(ip_param.strip(), tree)
+    st.json(result)
+else:
+    st.title("🔍 IP to ASN Lookup")
+    ip_input = st.text_input("Enter an IPv4 Address (e.g. 8.8.8.8)", "")
+    if st.button("Get ASN Info") and ip_input:
         result = get_asn_info(ip_input.strip(), tree)
-
         st.subheader("Result")
         st.json(result)
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
