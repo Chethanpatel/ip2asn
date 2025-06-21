@@ -1,16 +1,17 @@
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+import streamlit as st
 import pandas as pd
 import ipaddress
+import json
 from intervaltree import IntervalTree
 from urllib.request import Request, urlopen
 import os
 
-app = FastAPI()
-
+# Constants
 IP2ASN_URL = "https://iptoasn.com/data/ip2asn-v4.tsv.gz"
 IP2ASN_FILENAME = "ip2asn-v4.tsv.gz"
 
+# Download the IP2ASN dataset
+@st.cache_data(ttl=86400)  # cache for 1 day
 def download_ip2asn():
     if not os.path.exists(IP2ASN_FILENAME):
         req = Request(IP2ASN_URL, headers={"User-Agent": "Mozilla/5.0"})
@@ -18,6 +19,8 @@ def download_ip2asn():
             out_file.write(response.read())
     return IP2ASN_FILENAME
 
+# Load the data into an interval tree
+@st.cache_resource
 def load_ip2asn_interval_tree(filename):
     df = pd.read_csv(
         filename,
@@ -32,7 +35,7 @@ def load_ip2asn_interval_tree(filename):
         try:
             start = int(ipaddress.IPv4Address(row["range_start"]))
             end = int(ipaddress.IPv4Address(row["range_end"]))
-            tree[start:end+1] = {
+            tree[start:end + 1] = {
                 "AS_number": row["AS_number"],
                 "country_code": row["country_code"],
                 "AS_description": row["AS_description"]
@@ -41,26 +44,44 @@ def load_ip2asn_interval_tree(filename):
             continue
     return tree
 
-# Load the tree on startup
-filename = download_ip2asn()
-ASN_TREE = load_ip2asn_interval_tree(filename)
-
-@app.get("/getasn/{ip}")
-def get_asn(ip: str):
+# IP lookup function
+def get_asn_info(ip, tree):
     try:
         ip_obj = ipaddress.IPv4Address(ip)
         if ip_obj.is_private:
-            return JSONResponse({"AS_description": "Private Network"})
+            return {"AS_description": "Private Network"}
         ip_int = int(ip_obj)
     except Exception:
-        return JSONResponse({"AS_description": "Invalid IP"})
+        return {"AS_description": "Invalid IP"}
 
-    matches = ASN_TREE[ip_int]
+    matches = tree[ip_int]
     if matches:
         match = list(matches)[0].data
-        return JSONResponse({
+        return {
             "AS_number": match["AS_number"],
             "country_code": match["country_code"],
             "AS_description": match["AS_description"]
-        })
-    return JSONResponse({"AS_description": "ASN Unknown"})
+        }
+    return {"AS_description": "ASN Unknown"}
+
+# ----------------- Streamlit Interface -----------------
+
+filename = download_ip2asn()
+tree = load_ip2asn_interval_tree(filename)
+
+# Check if query param is passed
+query_params = st.experimental_get_query_params()
+ip_param = query_params.get("ip", [None])[0]
+
+if ip_param:
+    # API-style response
+    result = get_asn_info(ip_param.strip(), tree)
+    st.markdown("```json\n" + json.dumps(result, indent=2) + "\n```")
+else:
+    # UI mode
+    st.title("🔍 IP to ASN Lookup")
+    ip_input = st.text_input("Enter an IPv4 Address (e.g. 8.8.8.8)", "")
+    if st.button("Get ASN Info") and ip_input:
+        result = get_asn_info(ip_input.strip(), tree)
+        st.subheader("Result")
+        st.json(result)
